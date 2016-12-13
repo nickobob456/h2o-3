@@ -14,7 +14,6 @@ def pca_3694_rotterdam():
 
   print("Importing Rotterdam.csv data...")
   rotterdamH2O = h2o.upload_file(pyunit_utils.locate("bigdata/laptop/jira/rotterdam.csv.zip"))
-  rotterdamH2O.describe()
 
   y = set(["relapse"])
   x = list(set(rotterdamH2O.names)-y)

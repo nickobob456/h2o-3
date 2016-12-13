@@ -34,6 +34,7 @@ import java.util.Arrays;
 public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.PCAOutput> {
   // Number of columns in training set (p)
   private transient int _ncolExp;    // With categoricals expanded into 0/1 indicator cols
+  boolean wideDataset = false;        // default with wideDataset set to be false.
   @Override protected PCADriver trainModelImpl() { return new PCADriver(); }
   @Override public ModelCategory[] can_build() { return new ModelCategory[]{ ModelCategory.Clustering }; }
 
@@ -43,15 +44,27 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
   @Override protected void checkMemoryFootPrint() {
     HeartBeat hb = H2O.SELF._heartbeat;
     double p = hex.util.LinearAlgebraUtils.numColsExp(_train,true);
+    double r = _train.numRows();  // check for wide datasets.
     long mem_usage =
             _parms._pca_method == PCAParameters.Method.GramSVD ? (long)(hb._cpus_allowed * p*p * 8/*doubles*/ * Math.log((double)_train.lastVec().nChunks())/Math.log(2.)) : 1; //one gram per core
+    long mem_usage_w = _parms._pca_method == PCAParameters.Method.GramSVD ? (long)(hb._cpus_allowed * r*r * 8/*doubles*/ * Math.log((double)_train.lastVec().nChunks())/Math.log(2.)) : 1;
     long max_mem = hb.get_free_mem();
-    if (mem_usage > max_mem) {
+    if ((mem_usage > max_mem) && (mem_usage_w > max_mem)) {
       String msg = "Gram matrices (one per thread) won't fit in the driver node's memory ("
               + PrettyPrint.bytes(mem_usage) + " > " + PrettyPrint.bytes(max_mem)
               + ") - try reducing the number of columns and/or the number of categorical factors.";
       error("_train", msg);
     }
+
+    if (mem_usage > max_mem)
+      wideDataset = true;   // set to true if wide dataset is detected
+  }
+  /*
+  Set value of wideDataset.  Note that this routine is used for test purposes only and is not intended
+  for users but more for developers for setting.
+   */
+  public void setWideDataset(boolean isWide) {
+    wideDataset = isWide;
   }
 
   // Called from an http request

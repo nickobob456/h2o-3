@@ -2,7 +2,6 @@ package hex.gram;
 
 
 import hex.DataInfo;
-import hex.FrameTask;
 import hex.FrameTask2;
 import jsr166y.ForkJoinTask;
 import jsr166y.RecursiveAction;
@@ -728,6 +727,53 @@ public final class Gram extends Iced<Gram> {
       for(int j = 0; j < XX.length; ++j)
         d += xi[j]*x[j];
       res[i] = d;
+    }
+  }
+
+  /**
+   * Task to compute outer product of a matrix normalized by the number of observations (not counting rows with NAs).
+   * in R's notation g = X%*%T(X)/nobs, nobs = number of rows of X with no NA.  Copied from GramTask.
+   * @author wendycwong
+   */
+  public static class OuterProductTask extends FrameTask2<OuterProductTask> {
+    private  boolean _std = true;
+    public Gram _gram;
+    public long _nobs;
+    boolean _intercept = false;
+
+    public OuterProductTask(Key<Job> jobKey, DataInfo dinfo){
+      super(null,dinfo,jobKey);
+    }
+    public OuterProductTask(Key<Job> jobKey, DataInfo dinfo, boolean std, boolean intercept){
+      super(null,dinfo,jobKey);
+      _std = std;
+      _intercept = intercept;
+    }
+    @Override public void chunkInit(){
+      _gram = new Gram(_dinfo.fullN(), _dinfo.largestCat(), _dinfo.numNums(), _dinfo._cats, _intercept);
+    }
+    double _prev = 0;
+    @Override protected void processRow(DataInfo.Row r) {
+      _gram.addRow(r, r.weight);
+      ++_nobs;
+      double current = (_gram.get(_dinfo.fullN()-1,_dinfo.fullN()-1) - _prev);
+      _prev += current;
+    }
+    @Override public void chunkDone(){
+      if(_std) {
+        double r = 1.0 / _nobs;
+        _gram.mul(r);
+      }
+    }
+    @Override public void reduce(OuterProductTask gt){
+      if(_std) {
+        double r1 = (double) _nobs / (_nobs + gt._nobs);
+        _gram.mul(r1);
+        double r2 = (double) gt._nobs / (_nobs + gt._nobs);
+        gt._gram.mul(r2);
+      }
+      _gram.add(gt._gram);
+      _nobs += gt._nobs;
     }
   }
 
