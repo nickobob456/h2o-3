@@ -20,7 +20,10 @@ public final class Gram extends Iced<Gram> {
   int _fullN;
   final static int MIN_TSKSZ=10000;
 
-  public Gram(DataInfo dinfo) {this(dinfo.fullN(), dinfo.largestCat(), dinfo.numNums(), dinfo._cats,true);}
+  public Gram(DataInfo dinfo) {
+    this(dinfo.fullN(), dinfo.largestCat(), dinfo.numNums(), dinfo._cats,true);
+  }
+
   public Gram(int N, int diag, int dense, int sparse, boolean hasIntercept) {
     _hasIntercept = hasIntercept;
     _fullN = N + (_hasIntercept?1:0);
