@@ -3,24 +3,28 @@ package hex.pca;
 import Jama.Matrix;
 import Jama.SingularValueDecomposition;
 import hex.DataInfo;
-
 import hex.ModelBuilder;
-import hex.ModelMetrics;
 import hex.ModelCategory;
+import hex.ModelMetrics;
+import hex.genmodel.algos.glrm.GlrmInitialization;
+import hex.genmodel.algos.glrm.GlrmLoss;
 import hex.genmodel.algos.glrm.GlrmRegularizer;
 import hex.glrm.GLRM;
 import hex.glrm.GLRMModel;
-import hex.genmodel.algos.glrm.GlrmLoss;
-import hex.genmodel.algos.glrm.GlrmInitialization;
 import hex.gram.Gram;
 import hex.gram.Gram.GramTask;
-
 import hex.pca.PCAModel.PCAParameters;
 import hex.svd.SVD;
 import hex.svd.SVDModel;
-import water.*;
+import water.DKV;
+import water.H2O;
+import water.HeartBeat;
+import water.Job;
 import water.fvec.Frame;
-import water.util.*;
+import water.rapids.Rapids;
+import water.util.ArrayUtils;
+import water.util.PrettyPrint;
+import water.util.TwoDimTable;
 
 import java.util.Arrays;
 
@@ -33,7 +37,8 @@ import java.util.Arrays;
  */
 public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.PCAOutput> {
   // Number of columns in training set (p)
-  private transient int _ncolExp;    // With categoricals expanded into 0/1 indicator cols
+  private transient int _ncolExp;       // With categoricals expanded into 0/1 indicator cols
+  boolean _wideDataset = false;         // default with wideDataset set to be false.
   @Override protected PCADriver trainModelImpl() { return new PCADriver(); }
   @Override public ModelCategory[] can_build() { return new ModelCategory[]{ ModelCategory.Clustering }; }
 
@@ -43,15 +48,30 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
   @Override protected void checkMemoryFootPrint() {
     HeartBeat hb = H2O.SELF._heartbeat;
     double p = hex.util.LinearAlgebraUtils.numColsExp(_train,true);
+    double r = _train.numRows();
     long mem_usage =
-            _parms._pca_method == PCAParameters.Method.GramSVD ? (long)(hb._cpus_allowed * p*p * 8/*doubles*/ * Math.log((double)_train.lastVec().nChunks())/Math.log(2.)) : 1; //one gram per core
+            _parms._pca_method == PCAParameters.Method.GramSVD ? (long)(hb._cpus_allowed * p*p * 8/*doubles*/ *
+                    Math.log((double)_train.lastVec().nChunks())/Math.log(2.)) : 1; //one gram per core
+    long mem_usage_w = _parms._pca_method == PCAParameters.Method.GramSVD ? (long)(hb._cpus_allowed * r*r *
+            8/*doubles*/ * Math.log((double)_train.lastVec().nChunks())/Math.log(2.)) : 1;
     long max_mem = hb.get_free_mem();
-    if (mem_usage > max_mem) {
+    if ((mem_usage > max_mem) && (mem_usage_w > max_mem))  {
       String msg = "Gram matrices (one per thread) won't fit in the driver node's memory ("
               + PrettyPrint.bytes(mem_usage) + " > " + PrettyPrint.bytes(max_mem)
               + ") - try reducing the number of columns and/or the number of categorical factors.";
       error("_train", msg);
     }
+    if (mem_usage > max_mem) {
+      _wideDataset = true;   // set to true if wide dataset is detected
+    }
+  }
+
+  /*
+    Set value of wideDataset.  Note that this routine is used for test purposes only and is not intended
+    for users but more for developers for setting.
+ */
+  public void setWideDataset(boolean isWide) {
+    _wideDataset = isWide;
   }
 
   // Called from an http request
@@ -205,9 +225,14 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
         }
 
+        if (_wideDataset && _parms._impute_missing) { // remove NA rows in training data
+          _train = Rapids.exec(String.format("(na.omit %s)", _train._key)).getFrame();
+        }
+
         // The model to be built
         model = new PCAModel(dest(), _parms, new PCAModel.PCAOutput(PCA.this));
         model.delete_and_lock(_job);
+
         // store (possibly) rebalanced input train to pass it to nested SVD job
         Frame tranRebalanced = new Frame(_train);
         if(_parms._pca_method == PCAParameters.Method.GramSVD) {
@@ -217,13 +242,22 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           // Calculate and save Gram matrix of training data
           // NOTE: Gram computes A'A/n where n = nrow(A) = number of rows in training set (excluding rows with NAs)
           _job.update(1, "Begin distributed calculation of Gram matrix");
-          GramTask gtsk = new GramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
-          Gram gram = gtsk._gram;   // TODO: This ends up with all NaNs if training data has too many missing values
-          assert gram.fullN() == _ncolExp;
-          model._output._nobs = gtsk._nobs;
+          Gram gram = null;
+          Gram.OuterGramTask ogtsk = null;
+          GramTask gtsk = null;
+          if (_wideDataset) {
+            ogtsk = new Gram.OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+            gram = ogtsk._gram;
+            model._output._nobs = ogtsk._nobs;
+          } else {
+            gtsk = new GramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+            gram = gtsk._gram;   // TODO: This ends up with all NaNs if training data has too many missing values
+            assert gram.fullN() == _ncolExp;
+            model._output._nobs = gtsk._nobs;
+          }
 
           // Cannot calculate SVD if all rows contain missing value(s) and hence were skipped
-          if(gtsk._nobs == 0) {
+          if(model._output._nobs == 0) {
             error("_train", "Every row in _train contains at least one missing value. " +
                     "Consider setting impute_missing = TRUE or using pca_method = 'GLRM' instead.");
           }
@@ -234,10 +268,10 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           // Compute SVD of Gram A'A/n using JAMA library
           // Note: Singular values ordered in weakly descending order by algorithm
           _job.update(1, "Calculating SVD of Gram matrix locally");
-          Matrix gramJ = new Matrix(gtsk._gram.getXX());
+          Matrix gramJ = _wideDataset ? new Matrix(ogtsk._gram.getXX()) : new Matrix(gtsk._gram.getXX());
           SingularValueDecomposition svdJ = gramJ.svd();
           _job.update(1, "Computing stats from SVD");
-          computeStatsFillModel(model, dinfo, svdJ, gram, gtsk._nobs);
+          computeStatsFillModel(model, dinfo, svdJ, gram, model._output._nobs);
 
         } else if(_parms._pca_method == PCAParameters.Method.Power || _parms._pca_method == PCAParameters.Method.Randomized) {
           SVDModel.SVDParameters parms = new SVDModel.SVDParameters();

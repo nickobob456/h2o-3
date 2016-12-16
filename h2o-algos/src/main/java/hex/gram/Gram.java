@@ -738,16 +738,16 @@ public final class Gram extends Iced<Gram> {
    * in R's notation g = X%*%T(X)/nobs, nobs = number of rows of X with no NA.  Copied from GramTask.
    * @author wendycwong
    */
-  public static class OuterProductTask extends FrameTask2<OuterProductTask> {
+  public static class OuterGramTask extends FrameTask2<OuterGramTask> {
     private  boolean _std = true;
     public Gram _gram;
     public long _nobs;
     boolean _intercept = false;
 
-    public OuterProductTask(Key<Job> jobKey, DataInfo dinfo){
+    public OuterGramTask(Key<Job> jobKey, DataInfo dinfo){
       super(null,dinfo,jobKey);
     }
-    public OuterProductTask(Key<Job> jobKey, DataInfo dinfo, boolean std, boolean intercept){
+    public OuterGramTask(Key<Job> jobKey, DataInfo dinfo, boolean std, boolean intercept){
       super(null,dinfo,jobKey);
       _std = std;
       _intercept = intercept;
@@ -768,7 +768,7 @@ public final class Gram extends Iced<Gram> {
         _gram.mul(r);
       }
     }
-    @Override public void reduce(OuterProductTask gt){
+    @Override public void reduce(OuterGramTask gt){
       if(_std) {
         double r1 = (double) _nobs / (_nobs + gt._nobs);
         _gram.mul(r1);
