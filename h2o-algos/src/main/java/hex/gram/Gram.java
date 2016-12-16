@@ -325,8 +325,6 @@ public final class Gram extends Iced<Gram> {
     else return ArrayUtils.pprint(getXX(true,false));
   }
 
-
-
   static public class InPlaceCholesky {
     final double _xx[][];             // Lower triangle of the symmetric matrix.
     private boolean _isSPD;
@@ -752,15 +750,43 @@ public final class Gram extends Iced<Gram> {
       _std = std;
       _intercept = intercept;
     }
+
+    /*
+    Need to do our own thing here since we need to access and multiple different rows of a chunck.
+     */
+/*    @Override public void map(Chunk[] chks) {
+      if(_job != null && _job.stop_requested()) throw new Job.JobCancelledException();
+      chunkInit();
+      // compute
+      if(_sparse) {
+        for(DataInfo.Row r:_dinfo.extractSparseRows(chks)) {
+          if(!r.isBad() && r.weight != 0)
+            processRow(r);
+        }
+      } else {
+        DataInfo.Row row = _dinfo.newDenseRow();
+        for(int r = 0 ; r < chks[0]._len; ++r) {
+          _dinfo.extractDenseRow(chks, r, row);
+          if(!row.isBad() && row.weight != 0)
+            processRow(row);
+        }
+      }
+      chunkDone();
+    }*/
+
+    /*
+    Basically, every time we get an array of chunks, we will generate certain parts of the
+    gram matrix for only this block.
+     */
     @Override public void chunkInit(){
-      _gram = new Gram(_dinfo.fullN(), _dinfo.largestCat(), _dinfo.numNums(), _dinfo._cats, _intercept);
+      _gram = new Gram((int) _dinfo._adaptedFrame.numRows(), 0, _dinfo.numNums(), _dinfo._cats, _intercept);
     }
     double _prev = 0;
     @Override protected void processRow(DataInfo.Row r) {
       _gram.addRow(r, r.weight);
       ++_nobs;
       double current = (_gram.get(_dinfo.fullN()-1,_dinfo.fullN()-1) - _prev);
-      _prev += current;
+      _prev += current; // look at changes of corner element of gram matrix.
     }
     @Override public void chunkDone(){
       if(_std) {
@@ -768,6 +794,10 @@ public final class Gram extends Iced<Gram> {
         _gram.mul(r);
       }
     }
+    /*
+    Since each chunk only change a certain part of the gram matrix, we can add them all together when we
+    are doing the reduce job.  Hence, this part should be left alone.
+     */
     @Override public void reduce(OuterGramTask gt){
       if(_std) {
         double r1 = (double) _nobs / (_nobs + gt._nobs);

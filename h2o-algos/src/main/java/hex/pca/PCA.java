@@ -13,6 +13,7 @@ import hex.glrm.GLRM;
 import hex.glrm.GLRMModel;
 import hex.gram.Gram;
 import hex.gram.Gram.GramTask;
+import hex.gram.Gram.OuterGramTask;
 import hex.pca.PCAModel.PCAParameters;
 import hex.svd.SVD;
 import hex.svd.SVDModel;
@@ -225,7 +226,7 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
         }
 
-        if (_wideDataset && _parms._impute_missing) { // remove NA rows in training data
+        if (_wideDataset && _parms._impute_missing) { // remove NA rows in training data if impute missing is off
           _train = Rapids.exec(String.format("(na.omit %s)", _train._key)).getFrame();
         }
 
@@ -243,10 +244,10 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           // NOTE: Gram computes A'A/n where n = nrow(A) = number of rows in training set (excluding rows with NAs)
           _job.update(1, "Begin distributed calculation of Gram matrix");
           Gram gram = null;
-          Gram.OuterGramTask ogtsk = null;
+          OuterGramTask ogtsk = null;
           GramTask gtsk = null;
           if (_wideDataset) {
-            ogtsk = new Gram.OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+            ogtsk = new OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
             gram = ogtsk._gram;
             model._output._nobs = ogtsk._nobs;
           } else {
