@@ -6,6 +6,7 @@ import hex.FrameTask2;
 import jsr166y.ForkJoinTask;
 import jsr166y.RecursiveAction;
 import water.*;
+import water.fvec.Chunk;
 import water.util.ArrayUtils;
 
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ public final class Gram extends Iced<Gram> {
   boolean _hasIntercept;
   public double[][] _xx;
   public double[] _diag;
+  public double[][] _frame2DProduce;  // store result of transpose(Aframe)*eigenvector2Darray
   public int _diagN;
   final int _denseN;
   int _fullN;
@@ -667,6 +669,28 @@ public final class Gram extends Iced<Gram> {
     else
       addRowSparse(row, w);
   }
+
+  public final void addElementIJ(DataInfo.Row rowi, double wi, DataInfo.Row rowj, double wj, int ithRow, int jthRow,
+                                 int[] catOffsets) {
+    // nums
+    double elementij = 0.0;
+    double weights = wi*wj;
+    for(int i = 0; i < _denseN; ++i)  {
+      elementij += weights*rowi.numVals[i]*rowj.numVals[i]; // multiply numerical parts of columns
+    }
+
+    // cat X cat
+    if (catOffsets != null) {
+      for (int j = 0; j < rowi.nBins; ++j) {
+        if (rowi.binIds[j] == rowj.binIds[j]) {
+          elementij += weights*(catOffsets[j+1]-catOffsets[j]);
+        }
+      }
+    }
+    _xx[ithRow][jthRow] = elementij;
+  }
+
+
   public final void addRowDense(DataInfo.Row row, double w) {
     final int intercept = _hasIntercept?1:0;
     final int denseRowStart = _fullN - _denseN - _diagN - intercept; // we keep dense numbers at the right bottom of the matrix, -1 is for intercept
@@ -731,6 +755,7 @@ public final class Gram extends Iced<Gram> {
     }
   }
 
+
   /**
    * Task to compute outer product of a matrix normalized by the number of observations (not counting rows with NAs).
    * in R's notation g = X%*%T(X)/nobs, nobs = number of rows of X with no NA.  Copied from GramTask.
@@ -741,38 +766,45 @@ public final class Gram extends Iced<Gram> {
     public Gram _gram;
     public long _nobs;
     boolean _intercept = false;
+    int[] _catOffsets;
+    double _scale;    // 1/(number of samples)
 
     public OuterGramTask(Key<Job> jobKey, DataInfo dinfo){
       super(null,dinfo,jobKey);
+      _catOffsets = dinfo._catOffsets != null?Arrays.copyOf(dinfo._catOffsets, dinfo._catOffsets.length):null;
+      _scale = dinfo._adaptedFrame.numRows() > 0?1.0/dinfo._adaptedFrame.numRows():0.0;
+
     }
     public OuterGramTask(Key<Job> jobKey, DataInfo dinfo, boolean std, boolean intercept){
       super(null,dinfo,jobKey);
       _std = std;
       _intercept = intercept;
+      _catOffsets = dinfo._catOffsets != null?Arrays.copyOf(dinfo._catOffsets, dinfo._catOffsets.length):null;
+      _scale = dinfo._adaptedFrame.numRows() > 0?1.0/dinfo._adaptedFrame.numRows():0.0;
     }
 
     /*
     Need to do our own thing here since we need to access and multiple different rows of a chunck.
      */
-/*    @Override public void map(Chunk[] chks) {
-      if(_job != null && _job.stop_requested()) throw new Job.JobCancelledException();
+    @Override public void map(Chunk[] chks) { // TODO: implement the sparse option.
       chunkInit();
-      // compute
-      if(_sparse) {
-        for(DataInfo.Row r:_dinfo.extractSparseRows(chks)) {
-          if(!r.isBad() && r.weight != 0)
-            processRow(r);
-        }
-      } else {
-        DataInfo.Row row = _dinfo.newDenseRow();
-        for(int r = 0 ; r < chks[0]._len; ++r) {
-          _dinfo.extractDenseRow(chks, r, row);
-          if(!row.isBad() && row.weight != 0)
-            processRow(row);
+
+      DataInfo.Row rowi = _dinfo.newDenseRow();
+      DataInfo.Row rowj = _dinfo.newDenseRow();
+      int rowOffset = (int) chks[0].start();   // calculate row indices for this particular chunks of data
+
+      for(int i = 0 ; i < chks[0]._len; ++i) {  // each loop through here will set one element of gram matrix
+        for (int j = 0; j <= i; j++) {
+          _dinfo.extractDenseRow(chks, i, rowi);
+          _dinfo.extractDenseRow(chks, j, rowj);
+
+          if ((!rowi.isBad() && rowi.weight != 0) && (!rowj.isBad() && rowj.weight != 0)) {
+            processRow(rowi, rowj, i+rowOffset, j+rowOffset);
+          }
         }
       }
       chunkDone();
-    }*/
+    }
 
     /*
     Basically, every time we get an array of chunks, we will generate certain parts of the
@@ -781,30 +813,23 @@ public final class Gram extends Iced<Gram> {
     @Override public void chunkInit(){
       _gram = new Gram((int) _dinfo._adaptedFrame.numRows(), 0, _dinfo.numNums(), _dinfo._cats, _intercept);
     }
+
     double _prev = 0;
-    @Override protected void processRow(DataInfo.Row r) {
-      _gram.addRow(r, r.weight);
-      ++_nobs;
-      double current = (_gram.get(_dinfo.fullN()-1,_dinfo.fullN()-1) - _prev);
-      _prev += current; // look at changes of corner element of gram matrix.
+    protected void processRow(DataInfo.Row ri, DataInfo.Row rj, int ithRow, int jthRow) {
+      _gram.addElementIJ(ri, ri.weight, rj, rj.weight, ithRow, jthRow, _catOffsets);  // TODO: implement this for sparse matrices
+      ++_nobs;  // increment number of training samples used
     }
+
+    @Override protected void processRow(DataInfo.Row r) {}  // not implemented.
+
     @Override public void chunkDone(){
-      if(_std) {
-        double r = 1.0 / _nobs;
-        _gram.mul(r);
-      }
+        _gram.mul(_scale);
     }
     /*
     Since each chunk only change a certain part of the gram matrix, we can add them all together when we
     are doing the reduce job.  Hence, this part should be left alone.
      */
-    @Override public void reduce(OuterGramTask gt){
-      if(_std) {
-        double r1 = (double) _nobs / (_nobs + gt._nobs);
-        _gram.mul(r1);
-        double r2 = (double) gt._nobs / (_nobs + gt._nobs);
-        gt._gram.mul(r2);
-      }
+    @Override public void reduce(OuterGramTask gt) {
       _gram.add(gt._gram);
       _nobs += gt._nobs;
     }
