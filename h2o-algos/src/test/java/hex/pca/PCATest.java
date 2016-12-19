@@ -1,8 +1,8 @@
 package hex.pca;
 
-import hex.pca.PCAModel.PCAParameters;
 import hex.DataInfo;
 import hex.SplitFrame;
+import hex.pca.PCAModel.PCAParameters;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -14,8 +14,6 @@ import water.util.ArrayUtils;
 import water.util.FrameUtils;
 
 import java.util.concurrent.ExecutionException;
-
-import static org.junit.Assert.assertEquals;
 
 public class PCATest extends TestUtil {
   public static final double TOLERANCE = 1e-6;
@@ -104,6 +102,51 @@ public class PCATest extends TestUtil {
       if (model != null) model.delete();
     }
   }
+
+  @Test public void testWideDataSets() throws InterruptedException, ExecutionException {
+    // Results with original training frame
+    double[] stddev = new double[] {1.2234153936711119, 1.150609464655824, 1.0533528609876246};
+    double[][] eigvec = ard(ard(0.07506425495378136, -0.3013636649979242, 0.02775277590612959),
+            ard(-0.011759013653247836, -0.2142417014146692, 0.07721786630999325),
+            ard(0.07167098726266116, -0.21154052054063077, -0.010863797239675317),
+            ard(0.0067963977734715195, -1.4638949770691E-4, -0.003163243567788412),
+            ard(0.21821075869979262, -0.7675807352852926, 0.10751549609805071),
+            ard(0.3289193137405122, -0.29461201551366345, 0.00909126860899019),
+            ard(0.12066413646090679, -0.05515606607024979, -0.0015581065641026538),
+            ard(0.01937052675794663, 0.04196726230133341, 0.7120752116415129),
+            ard(0.608322713023871, 0.29803011754691633, 0.05785031654506153),
+            ard(-0.1120155538460368, 0.08773078588018927, 0.6863622122565451),
+            ard(0.660076702365319, 0.20305790351953285, 0.0019086689445665006));
+
+    PCAModel model = null;
+    Frame train = null, score = null, scoreR = null;
+    try {
+      train = parse_test_file(Key.make("iris.hex"), "smalldata/prostate/prostate_cat.csv");
+      PCAModel.PCAParameters parms = new PCAModel.PCAParameters();
+      parms._train = train._key;
+      parms._k = 7;
+      parms._transform = DataInfo.TransformType.STANDARDIZE;
+      parms._use_all_factor_levels = false;
+      parms._pca_method = PCAParameters.Method.GramSVD;
+
+      model = new PCA(parms).trainModel().get();
+      TestUtil.checkStddev(stddev, model._output._std_deviation, 1e-5);
+      boolean[] flippedEig = TestUtil.checkEigvec(eigvec, model._output._eigenvectors, 1e-5);
+
+      score = model.score(train);
+      scoreR = parse_test_file(Key.make("scoreR.hex"), "smalldata/prostate/prostate_cat.csv");
+      TestUtil.checkProjection(scoreR, score, TOLERANCE, flippedEig);    // Flipped cols must match those from eigenvectors
+
+      // Build a POJO, validate same results
+      Assert.assertTrue(model.testJavaScoring(train,score,1e-5));
+    } finally {
+      if (train != null) train.delete();
+      if (score != null) score.delete();
+      if (scoreR != null) scoreR.delete();
+      if (model != null) model.delete();
+    }
+  }
+
 
   @Test public void testIrisScoring() throws InterruptedException, ExecutionException {
     // Results with original training frame

@@ -151,6 +151,78 @@ public class LinearAlgebraUtils {
     }
   }
 
+
+  /**
+   * Computes A'X where A is n by p and X is a 2D double array.  The output is small.
+   * Input: [A] (large frame) passed to doAll
+   * Output: atq = A'X (small matrix) is \tilde{p} by k where \tilde{p} = number of cols in A with categoricals expanded
+   */
+  public static class AMulTask extends MRTask<AMulTask> {
+    final DataInfo _ainfo;  // Info for frame A
+    final int _ncolA;     // Number of cols in A
+    final int _ncolExp;   // Number of cols in A with categoricals expanded
+    final int _ncolX;     // Number of cols in X
+    final double[][] _X;  // 2-D double array to be multiplied
+
+    public double[][] _atq;    // Output: A'Q is p_exp by k, where p_exp = number of cols in A with categoricals expanded
+
+    public AMulTask(DataInfo ainfo, double[][] x) {
+      _ainfo = ainfo;
+      _ncolA = ainfo._adaptedFrame.numCols();
+      _ncolExp = numColsExp(ainfo._adaptedFrame,true);
+      _ncolX = ainfo._adaptedFrame.numCols();
+      _X = x;
+    }
+
+    @Override public void map(Chunk cs[]) {
+      assert (_ncolA + _ncolX) == cs.length;
+      _atq = new double[_ncolExp][_ncolX];
+
+      for(int k = _ncolA; k < (_ncolA + _ncolX); k++) {
+        // Categorical columns
+        int cidx;
+        for(int p = 0; p < _ainfo._cats; p++) {
+          for(int row = 0; row < cs[0]._len; row++) {
+            if(cs[p].isNA(row) && _ainfo._skipMissing) continue;
+            double q = cs[k].atd(row);
+            double a = cs[p].atd(row);
+
+            if (Double.isNaN(a)) {
+              if (_ainfo._imputeMissing)
+                cidx = _ainfo.catNAFill()[p];
+              else if (!_ainfo._catMissing[p])
+                continue;   // Skip if entry missing and no NA bucket. All indicators will be zero.
+              else
+                cidx = _ainfo._catOffsets[p+1]-1;     // Otherwise, missing value turns into extra (last) factor
+            } else
+              cidx = _ainfo.getCategoricalId(p, (int)a);
+            if(cidx >= 0) _atq[cidx][k-_ncolA] += q;   // Ignore categorical levels outside domain
+          }
+        }
+
+        // Numeric columns
+        int pnum = 0;
+        int pexp = _ainfo.numStart();
+        for(int p = _ainfo._cats; p < _ncolA; p++) {
+          for(int row = 0; row  < cs[0]._len; row++) {
+            if(cs[p].isNA(row) && _ainfo._skipMissing) continue;
+            double q = cs[k].atd(row);
+            double a = cs[p].atd(row);
+            a = modifyNumeric(a, pnum, _ainfo);
+            _atq[pexp][k-_ncolA] += q * a;
+          }
+          pexp++; pnum++;
+        }
+        assert pexp == _atq.length;
+      }
+    }
+
+    @Override public void reduce(AMulTask other) {
+      ArrayUtils.add(_atq, other._atq);
+    }
+  }
+
+
   /**
    * Computes A'Q where A is n by p and Q is n by k
    * Input: [A,Q] (large frame) passed to doAll

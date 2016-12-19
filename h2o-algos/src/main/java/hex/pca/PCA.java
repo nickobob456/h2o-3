@@ -17,6 +17,7 @@ import hex.gram.Gram.OuterGramTask;
 import hex.pca.PCAModel.PCAParameters;
 import hex.svd.SVD;
 import hex.svd.SVDModel;
+import hex.util.LinearAlgebraUtils.AMulTask;
 import water.DKV;
 import water.H2O;
 import water.HeartBeat;
@@ -183,7 +184,8 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       buildTables(pca, glrm._output._names_expanded);
     }
 
-    protected void computeStatsFillModel(PCAModel pca, DataInfo dinfo, SingularValueDecomposition svd, Gram gram, long nobs) {
+    protected void computeStatsFillModel(PCAModel pca, DataInfo dinfo, double[] sval,
+                                         double[][] eigvec, Gram gram, long nobs) {
       // Save adapted frame info for scoring later
       pca._output._normSub = dinfo._normSub == null ? new double[dinfo._nums] : dinfo._normSub;
       if(dinfo._normMul == null) {
@@ -198,20 +200,23 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       pca._output._catOffsets = dinfo._catOffsets;
 
       double dfcorr = nobs / (nobs - 1.0);
-      double[] sval = svd.getSingularValues();
       pca._output._std_deviation = new double[_parms._k];    // Only want first k standard deviations
       for(int i = 0; i < _parms._k; i++) {
         sval[i] = dfcorr * sval[i];   // Degrees of freedom = n-1, where n = nobs = # row observations processed
         pca._output._std_deviation[i] = Math.sqrt(sval[i]);
       }
 
-      double[][] eigvec = svd.getV().getArray();
       pca._output._eigenvectors_raw = new double[eigvec.length][_parms._k];   // Only want first k eigenvectors
       for(int i = 0; i < eigvec.length; i++) {
         System.arraycopy(eigvec[i], 0, pca._output._eigenvectors_raw[i], 0, _parms._k);
       }
       pca._output._total_variance = dfcorr * gram.diagSum();  // Since gram = X'X/n, but variance requires n-1 in denominator
       buildTables(pca, dinfo.coefNames());
+    }
+
+    protected void computeStatsFillModel(PCAModel pca, DataInfo dinfo, SingularValueDecomposition svd, Gram gram,
+                                         long nobs) {
+      computeStatsFillModel(pca, dinfo, svd.getSingularValues(), svd.getV().getArray(), gram, nobs);
     }
 
     // Main worker thread
@@ -272,7 +277,14 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           Matrix gramJ = _wideDataset ? new Matrix(ogtsk._gram.getXX()) : new Matrix(gtsk._gram.getXX());
           SingularValueDecomposition svdJ = gramJ.svd();
           _job.update(1, "Computing stats from SVD");
-          computeStatsFillModel(model, dinfo, svdJ, gram, model._output._nobs);
+          // correct for the eigenvector by t(A)*eigenvector for wide dataset
+          if (_wideDataset) {
+            AMulTask stsk = new AMulTask(dinfo, svdJ.getV().getArray());
+            computeStatsFillModel(model, dinfo, svdJ.getSingularValues(), stsk.doAll(dinfo._adaptedFrame)._atq, gram,
+                    model._output._nobs);
+          } else {
+            computeStatsFillModel(model, dinfo, svdJ, gram, model._output._nobs);
+          }
 
         } else if(_parms._pca_method == PCAParameters.Method.Power || _parms._pca_method == PCAParameters.Method.Randomized) {
           SVDModel.SVDParameters parms = new SVDModel.SVDParameters();
