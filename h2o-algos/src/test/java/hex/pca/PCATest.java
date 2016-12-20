@@ -104,7 +104,7 @@ public class PCATest extends TestUtil {
   }
 
   @Test public void testWideDataSets() throws InterruptedException, ExecutionException {
-    // Results with original training frame
+    // Results with original training frame not treated as wide dataset.
     double[] stddev = new double[] {1.2234153936711119, 1.150609464655824, 1.0533528609876246};
     double[][] eigvec = ard(ard(0.07506425495378136, -0.3013636649979242, 0.02775277590612959),
             ard(-0.011759013653247836, -0.2142417014146692, 0.07721786630999325),
@@ -121,7 +121,7 @@ public class PCATest extends TestUtil {
     PCAModel model = null;
     Frame train = null, score = null, scoreR = null;
     try {
-      train = parse_test_file(Key.make("iris.hex"), "smalldata/prostate/prostate_cat.csv");
+      train = parse_test_file(Key.make("prostate_cat.hex"), "smalldata/prostate/prostate_cat.csv");
       PCAModel.PCAParameters parms = new PCAModel.PCAParameters();
       parms._train = train._key;
       parms._k = 7;
@@ -129,7 +129,11 @@ public class PCATest extends TestUtil {
       parms._use_all_factor_levels = false;
       parms._pca_method = PCAParameters.Method.GramSVD;
 
-      model = new PCA(parms).trainModel().get();
+      PCA pcaParms = new PCA(parms);
+      pcaParms.setWideDataset(true);  // force to treat dataset as wide even though it is not.
+      model = pcaParms.trainModel().get();
+
+      // check to make sure eigenvalues and eigenvectors are the same
       TestUtil.checkStddev(stddev, model._output._std_deviation, 1e-5);
       boolean[] flippedEig = TestUtil.checkEigvec(eigvec, model._output._eigenvectors, 1e-5);
 

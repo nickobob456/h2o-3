@@ -23,7 +23,6 @@ import water.H2O;
 import water.HeartBeat;
 import water.Job;
 import water.fvec.Frame;
-import water.rapids.Rapids;
 import water.util.ArrayUtils;
 import water.util.PrettyPrint;
 import water.util.TwoDimTable;
@@ -231,10 +230,6 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
         }
 
-        if (_wideDataset && _parms._impute_missing) { // remove NA rows in training data if impute missing is off
-          _train = Rapids.exec(String.format("(na.omit %s)", _train._key)).getFrame();
-        }
-
         // The model to be built
         model = new PCAModel(dest(), _parms, new PCAModel.PCAOutput(PCA.this));
         model.delete_and_lock(_job);
@@ -253,6 +248,11 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           GramTask gtsk = null;
           if (_wideDataset) {
             ogtsk = new OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+            // take care of NA rows here.  The gram matrix for NA rows are all zeros.
+            if ((!_parms._impute_missing) && dinfo._adaptedFrame.hasNAs()) {
+              ogtsk.removeNAFromGram();
+            }
+
             gram = ogtsk._gram;
             model._output._nobs = ogtsk._nobs;
           } else {
