@@ -23,6 +23,7 @@ import water.H2O;
 import water.HeartBeat;
 import water.Job;
 import water.fvec.Frame;
+import water.rapids.Rapids;
 import water.util.ArrayUtils;
 import water.util.PrettyPrint;
 import water.util.TwoDimTable;
@@ -236,6 +237,7 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
 
         // store (possibly) rebalanced input train to pass it to nested SVD job
         Frame tranRebalanced = new Frame(_train);
+
         if(_parms._pca_method == PCAParameters.Method.GramSVD) {
           dinfo = new DataInfo(_train, _valid, 0, _parms._use_all_factor_levels, _parms._transform, DataInfo.TransformType.NONE, /* skipMissing */ !_parms._impute_missing, /* imputeMissing */ _parms._impute_missing, /* missingBucket */ false, /* weights */ false, /* offset */ false, /* fold */ false, /* intercept */ false);
           DKV.put(dinfo._key, dinfo);
@@ -246,12 +248,18 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           Gram gram = null;
           OuterGramTask ogtsk = null;
           GramTask gtsk = null;
+          long numNArows = 0l;
+
           if (_wideDataset) {
-            ogtsk = new OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
-            // take care of NA rows here.  The gram matrix for NA rows are all zeros.
+            // count NA rows here and pass the info to OuterGramTask
             if ((!_parms._impute_missing) && dinfo._adaptedFrame.hasNAs()) {
-              ogtsk.removeNAFromGram();
+              DKV.put(tranRebalanced._key, tranRebalanced);
+              numNArows = (long) Rapids.exec(String.format("(naRowCnt %s)", tranRebalanced._key)).getNums()[0];
+/*              if (tranRebalanced != null) { // remove the key here.  Don't need it anymore
+                tranRebalanced.remove();
+              }*/
             }
+            ogtsk = new OuterGramTask(_job._key, dinfo, numNArows).doAll(dinfo._adaptedFrame);
 
             gram = ogtsk._gram;
             model._output._nobs = ogtsk._nobs;

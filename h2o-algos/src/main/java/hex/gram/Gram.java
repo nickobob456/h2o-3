@@ -768,65 +768,16 @@ public final class Gram extends Iced<Gram> {
     boolean _intercept = false;
     int[] _catOffsets;
     double _scale;    // 1/(number of samples)
-    ArrayList<Integer> _naRowIndices;  // store row indices where NA is found
+    long _rowsNoNas;  // number of rows without NAs in them;
 
 
-    public OuterGramTask(Key<Job> jobKey, DataInfo dinfo){
+    public OuterGramTask(Key<Job> jobKey, DataInfo dinfo, long rowsNas){
       super(null,dinfo,jobKey);
       _catOffsets = dinfo._catOffsets != null?Arrays.copyOf(dinfo._catOffsets, dinfo._catOffsets.length):null;
       _scale = dinfo._adaptedFrame.numRows() > 0?1.0/dinfo._adaptedFrame.numRows():0.0;
-      _naRowIndices = new ArrayList<Integer>();
-
-    }
-    public OuterGramTask(Key<Job> jobKey, DataInfo dinfo, boolean std, boolean intercept){
-      super(null,dinfo,jobKey);
-      _std = std;
-      _intercept = intercept;
-      _catOffsets = dinfo._catOffsets != null?Arrays.copyOf(dinfo._catOffsets, dinfo._catOffsets.length):null;
-      _scale = dinfo._adaptedFrame.numRows() > 0?1.0/dinfo._adaptedFrame.numRows():0.0;
-      _naRowIndices = new ArrayList<Integer>();
+      _rowsNoNas = dinfo._adaptedFrame.numRows()-rowsNas;
     }
 
-    /*
-    Go through the Gram matrix and remove the column and rows corresponding to NA columns
-     */
-    public void removeNAFromGram() {
-      if ((_naRowIndices != null) && (_naRowIndices.size() > 0)) {
-        // sort the row indices so that smallest is at the front
-        int oldGramSize = _gram._xx.length;
-        int trueRowIndex = 0;
-        for (int rowIndex = 0; rowIndex < oldGramSize; rowIndex++) {
-          if (!_naRowIndices.contains(rowIndex)) {
-            int trueColIndex = 0;
-            ArrayList<Double> tempRow = new ArrayList<Double>();
-            for (int colIndex = 0; colIndex <= rowIndex; colIndex++) {
-              if (!_naRowIndices.contains(colIndex)) {
-                tempRow.add(_gram._xx[rowIndex][colIndex]);
-                trueColIndex++;
-              }
-            }
-            _gram._xx[trueRowIndex] = copyDoubleArrays(tempRow);
-            trueRowIndex++;
-          }
-        }
-        // remove the extra rows of gram matrix that we do not need
-        for (int rowIndex = oldGramSize-1; rowIndex >= trueRowIndex; rowIndex--) {
-          _gram._xx[rowIndex] = null;
-        }
-      }
-    }
-
-    /*
-    Silly little function to convert arraylist of Double to a double[].
-     */
-    public double[] copyDoubleArrays(ArrayList<Double> rowInfo) {
-      double[] newRow = new double[rowInfo.size()];
-
-      for (int index = 0; index < rowInfo.size(); index++) {
-        newRow[index] = rowInfo.get(index);
-      }
-      return newRow;
-    }
     /*
     Need to do our own thing here since we need to access and multiple different rows of a chunck.
      */
@@ -836,21 +787,23 @@ public final class Gram extends Iced<Gram> {
       DataInfo.Row rowi = _dinfo.newDenseRow();
       DataInfo.Row rowj = _dinfo.newDenseRow();
       int rowOffset = (int) chks[0].start();   // calculate row indices for this particular chunks of data
+      int trueI = 0;    // true row count
 
       for(int i = 0 ; i < chks[0]._len; ++i) {  // each loop through here will set one element of gram matrix
         _dinfo.extractDenseRow(chks, i, rowi);
         if (!rowi.isBad()) {
           ++_nobs;  // increment number of training samples used
-          int rowIOffset = i+rowOffset;
+          int rowIOffset = trueI+rowOffset;
+          int trueJ = 0;    // true column count.  Skip over NAs.
           for (int j = 0; j <= i; j++) {
             _dinfo.extractDenseRow(chks, j, rowj);
 
             if ((!rowi.isBad() && rowi.weight != 0) && (!rowj.isBad() && rowj.weight != 0)) {
-              processRow(rowi, rowj, rowIOffset, j + rowOffset);
+              processRow(rowi, rowj, rowIOffset, trueJ + rowOffset);
+              trueJ++;
             }
           }
-        } else {
-          _naRowIndices.add(i + rowOffset);
+          trueI++;
         }
       }
       chunkDone();
@@ -861,7 +814,7 @@ public final class Gram extends Iced<Gram> {
     gram matrix for only this block.
      */
     @Override public void chunkInit(){
-      _gram = new Gram((int) _dinfo._adaptedFrame.numRows(), 0, _dinfo.numNums(), _dinfo._cats, _intercept);
+      _gram = new Gram((int) _rowsNoNas, 0, _dinfo.numNums(), _dinfo._cats, _intercept);
     }
 
     double _prev = 0;
@@ -881,7 +834,6 @@ public final class Gram extends Iced<Gram> {
     @Override public void reduce(OuterGramTask gt) {
       _gram.add(gt._gram);
       _nobs += gt._nobs;
-      _naRowIndices.addAll(gt._naRowIndices);   // combine na indices across chunks
     }
   }
 
