@@ -56,11 +56,11 @@ public class WordVectorTrainer extends MRTask<WordVectorTrainer> {
     _wordCountsKey = input._wordCountsKey;
 
     // Params
-    _wordVecSize = input.getParams()._vecSize;
-    _windowSize = input.getParams()._windowSize;
-    _sentSampleRate = input.getParams()._sentSampleRate;
+    _wordVecSize = input.getParams()._vec_size;
+    _windowSize = input.getParams()._window_size;
+    _sentSampleRate = input.getParams()._sent_sample_rate;
     _epochs = input.getParams()._epochs;
-    _initLearningRate = input.getParams()._initLearningRate;
+    _initLearningRate = input.getParams()._init_learning_rate;
 
     _vocabWordCount = input._vocabWordCount;
     _prevTotalProcessedWords = input._totalProcessedWords;
