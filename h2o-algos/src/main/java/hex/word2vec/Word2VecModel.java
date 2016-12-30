@@ -178,7 +178,7 @@ public class Word2VecModel extends Model<Word2VecModel, Word2VecParameters, Word
     public int _vecSize = 100;
     public int _windowSize = 5;
     public int _epochs = 5;
-    public float _initLearningRate = 0.05f;
+    public float _initLearningRate = 0.025f;
     public float _sentSampleRate = 1e-3f;
     Vec trainVec() { return train().vec(0); }
   }
@@ -205,7 +205,7 @@ public class Word2VecModel extends Model<Word2VecModel, Word2VecParameters, Word
     float[] _syn0, _syn1;
     Key<HBWTree> _treeKey;
     Key<Vocabulary> _vocabKey;
-    Key<?> _wordCountsKey;
+    Key<WordCounts> _wordCountsKey;
 
     private Word2VecParameters _parameters;
     public final Word2VecParameters getParams() { return _parameters; }
